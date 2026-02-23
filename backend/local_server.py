@@ -1,22 +1,24 @@
 """
-VaultSpeed — Local dev server
-Run on your PC, point the Expo app at your local IP.
+VaultSpeed — Local dev server with auto-tunnel (ngrok)
 
 Usage:
   pip install -r requirements.txt
   python local_server.py
 
-Then set in app/.env:
-  EXPO_PUBLIC_API_URL=http://<your-pc-ip>:8000
+On startup it will:
+  1. Start the FastAPI server on port 8000
+  2. Open a public ngrok tunnel automatically
+  3. Print the URL — paste it into app/.env as EXPO_PUBLIC_API_URL
 
-Find your IP:  ipconfig  (look for IPv4 under your WiFi adapter)
-Phone must be on the same WiFi network.
+No same-WiFi required. Works from anywhere.
 """
 
 import base64
 import json
 import os
+import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import uvicorn
@@ -35,7 +37,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Simple JSON file to persist per-athlete averages across runs
 HISTORY_FILE = Path(__file__).parent / "run_history.json"
 
 
@@ -68,7 +69,6 @@ async def analyze(
 
     video_bytes = await video.read()
 
-    # Write to temp files
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f_in:
         f_in.write(video_bytes)
         input_path = f_in.name
@@ -83,11 +83,9 @@ async def analyze(
             prev_avg_kmh=prev_avg,
         )
 
-        # Persist this run's avg for next delta
         history[athlete_id] = stats["avg_kmh"]
         _save_history(history)
 
-        # Read annotated video and base64 encode
         with open(output_path, "rb") as f:
             video_b64 = base64.b64encode(f.read()).decode()
 
@@ -101,17 +99,44 @@ async def analyze(
                 pass
 
 
+# ─── ngrok tunnel ─────────────────────────────────────────────────────────────
+def _start_tunnel(port: int = 8000) -> None:
+    """Start ngrok tunnel and print the public URL."""
+    try:
+        from pyngrok import ngrok, conf
+
+        # Use free tier — no auth token needed for basic HTTP tunnels
+        tunnel = ngrok.connect(port, "http")
+        public_url = tunnel.public_url
+
+        # ngrok gives http:// — upgrade to https://
+        if public_url.startswith("http://"):
+            public_url = "https://" + public_url[7:]
+
+        print("\n" + "=" * 54)
+        print("  ✓  ngrok tunnel active")
+        print(f"  URL: {public_url}")
+        print()
+        print("  Paste into app/.env:")
+        print(f"  EXPO_PUBLIC_API_URL={public_url}")
+        print("=" * 54 + "\n")
+
+    except ImportError:
+        print("\n[tunnel] pyngrok not installed — running local only.")
+        print("[tunnel] Install with:  pip install pyngrok")
+        print("[tunnel] Or connect phone to the same WiFi and use local IP.\n")
+    except Exception as e:
+        print(f"\n[tunnel] Could not start ngrok: {e}")
+        print("[tunnel] Falling back to local-only mode.\n")
+
+
 if __name__ == "__main__":
-    import socket
+    PORT = 8000
 
-    # Print local IP so you know what to put in app/.env
-    hostname = socket.gethostname()
-    local_ip = socket.gethostbyname(hostname)
-    print(f"\n{'='*50}")
-    print(f"  VaultSpeed local server")
-    print(f"  Local IP:  http://{local_ip}:8000")
-    print(f"  Set in app/.env:")
-    print(f"  EXPO_PUBLIC_API_URL=http://{local_ip}:8000")
-    print(f"{'='*50}\n")
+    # Start tunnel in background thread (server starts immediately in parallel)
+    t = threading.Thread(target=_start_tunnel, args=(PORT,), daemon=True)
+    t.start()
+    t.join(timeout=6)   # wait up to 6s for URL to print before server logs flood output
 
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
+    print(f"[server] Starting on http://0.0.0.0:{PORT}")
+    uvicorn.run(app, host="0.0.0.0", port=PORT, reload=False)
