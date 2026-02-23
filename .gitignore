@@ -14,6 +14,8 @@ app/.env
 .DS_Store
 Thumbs.db
 
+backend/run_history.json
+
 ## Misc
 *.log
 .idea/

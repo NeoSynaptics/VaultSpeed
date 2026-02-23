@@ -64,8 +64,9 @@ export default function ResultScreen({ result, onRecordAgain }: Props) {
 
       {/* Info */}
       <Text style={styles.subtext}>
-        Pole plant detected at frame {stats.pole_plant_frame} / {stats.total_frames} •{" "}
-        {stats.fps.toFixed(0)} fps
+        {stats.trimmed_seconds?.toFixed(1)}s clip (trimmed from{" "}
+        {(stats.original_frames / stats.fps).toFixed(1)}s) •{" "}
+        plant @{stats.pole_plant_frame}f • {stats.fps.toFixed(0)} fps
       </Text>
 
       {/* Buttons */}

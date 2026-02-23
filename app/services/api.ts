@@ -9,6 +9,8 @@ export interface AnalysisStats {
   pole_plant_frame: number;
   total_frames: number;
   fps: number;
+  trimmed_seconds: number;
+  original_frames: number;
 }
 
 export interface AnalysisResult {
