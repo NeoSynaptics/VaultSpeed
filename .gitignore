@@ -1,0 +1,20 @@
+## Backend
+backend/__pycache__/
+backend/*.pyc
+backend/.env
+*.pt
+
+## Expo / React Native
+app/node_modules/
+app/.expo/
+app/dist/
+app/.env
+
+## OS
+.DS_Store
+Thumbs.db
+
+## Misc
+*.log
+.idea/
+.vscode/

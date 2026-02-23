@@ -1,0 +1,49 @@
+{
+  "expo": {
+    "name": "VaultSpeed",
+    "slug": "vaultspeed",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0a"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.neosynaptics.vaultspeed",
+      "infoPlist": {
+        "NSCameraUsageDescription": "VaultSpeed records your pole vault approach run.",
+        "NSMicrophoneUsageDescription": "Audio is recorded alongside video.",
+        "NSPhotoLibraryAddUsageDescription": "Annotated videos are saved to your camera roll.",
+        "NSPhotoLibraryUsageDescription": "VaultSpeed saves videos to your camera roll."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0a0a"
+      },
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "package": "com.neosynaptics.vaultspeed"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-camera",
+      "expo-media-library",
+      "expo-asset",
+      "expo-video"
+    ]
+  }
+}
