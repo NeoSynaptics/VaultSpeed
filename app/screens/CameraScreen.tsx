@@ -284,7 +284,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   permissionButton: {
-    backgroundColor: "#e5242f",
+    backgroundColor: "#2563eb",
     borderRadius: 12,
     paddingVertical: 14,
     paddingHorizontal: 28,

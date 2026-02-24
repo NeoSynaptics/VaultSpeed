@@ -271,15 +271,12 @@ def compute_velocities_kmh(
     """
     Compute per-frame speed in km/h directly.
 
-    Calibration strategy:
-    - Use the median bbox height across all frames as the px-per-meter scale.
-      (Median is robust to YOLO noise and partial occlusions.)
-    - Full 2D displacement (hypot of dx+dy) so angled shots still work —
-      a runner moving at 45° to the camera contributes both x and y motion.
+    Calibration: median bbox height → px/m scale.
 
-    Formula per frame i:
-        dist_px/s = hypot(dx, dy) / (2*step/fps)
-        km/h      = dist_px/s / px_per_m * 3.6
+    Motion axis: auto-detect whether the runner moves mainly in x or y
+    (handles both landscape and portrait source videos after rotation fix).
+    Only the dominant axis is used — the other axis is YOLO jitter/perspective
+    noise that would inflate the reading by 30-80 % if included via hypot.
     """
     n = len(centroids)
     valid_h = [h for h in bbox_heights if h is not None and h > 10]
@@ -290,11 +287,21 @@ def compute_velocities_kmh(
     px_per_m = median_h / ATHLETE_HEIGHT_M
     print(f"[calibration] median bbox height={median_h:.1f}px  px/m={px_per_m:.2f}")
 
+    # Determine dominant motion axis from median per-frame displacements
+    all_dx = [abs(centroids[i][0] - centroids[i-1][0])
+              for i in range(1, n) if centroids[i] and centroids[i-1]]
+    all_dy = [abs(centroids[i][1] - centroids[i-1][1])
+              for i in range(1, n) if centroids[i] and centroids[i-1]]
+    med_dx = float(np.median(all_dx)) if all_dx else 0.0
+    med_dy = float(np.median(all_dy)) if all_dy else 0.0
+    use_x  = med_dx >= med_dy   # True → runner moves left-right; False → up-down
+    print(f"[speed] axis={'x' if use_x else 'y'}  med_dx={med_dx:.1f}  med_dy={med_dy:.1f}")
+
     v = [0.0] * n
     for i in range(step, n - step):
         p0, p1 = centroids[i - step], centroids[i + step]
         if p0 and p1:
-            dist = np.hypot(p1[0] - p0[0], p1[1] - p0[1])   # full 2D
+            dist = abs(p1[0] - p0[0]) if use_x else abs(p1[1] - p0[1])
             v[i] = dist / (2 * step / fps) / px_per_m * 3.6
     return v
 
@@ -353,9 +360,9 @@ def find_run_window(velocities: list[float], fps: float) -> tuple[int, int]:
 
 
 # ─── Speed bar overlay ────────────────────────────────────────────────────────
-def _build_buckets(velocities_kmh: list[float], plant_local: int) -> list[float]:
+def _build_buckets(velocities_kmh: list[float], win_start: int, plant_local: int) -> list[float]:
     """10 equal-time buckets from run start to pole plant."""
-    run = velocities_kmh[:plant_local] if plant_local < len(velocities_kmh) else velocities_kmh
+    run = velocities_kmh[win_start:plant_local] if plant_local < len(velocities_kmh) else velocities_kmh[win_start:]
     if not run:
         return [0.0] * NUM_BUCKETS
     chunk = max(1, len(run) // NUM_BUCKETS)
@@ -438,13 +445,33 @@ def analyze_video(
     width  = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    print(f"[analyzer] {total} frames @ {fps:.1f}fps  {width}x{height}")
+
+    # ── Handle mobile phone rotation metadata ────────────────────────────────
+    # Phones embed a rotation angle in the MP4 container. OpenCV (FFMPEG backend)
+    # reads raw pixel data without applying it, so portrait videos appear sideways.
+    # This would make bbox heights wrong (person's width instead of height) and
+    # flip the dominant motion axis.
+    try:
+        rotation_meta = int(cap.get(cv2.CAP_PROP_ORIENTATION_META))
+    except (AttributeError, TypeError):
+        rotation_meta = 0
+    rotate_code = {
+        90:  cv2.ROTATE_90_CLOCKWISE,
+        180: cv2.ROTATE_180,
+        270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+    }.get(rotation_meta if rotation_meta in (90, 180, 270) else 0)
+    if rotate_code in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE):
+        width, height = height, width   # dimensions swap for 90/270
+
+    print(f"[analyzer] {total} frames @ {fps:.1f}fps  {width}x{height}  rotation={rotation_meta}°")
 
     frames = []
     while True:
         ok, f = cap.read()
         if not ok:
             break
+        if rotate_code is not None:
+            f = cv2.rotate(f, rotate_code)
         frames.append(f)
     cap.release()
 
@@ -477,7 +504,7 @@ def analyze_video(
     delta    = (avg_kmh - prev_avg_kmh) if prev_avg_kmh is not None else None
 
     # ── Build buckets for bar chart ───────────────────────────────────────────
-    buckets = _build_buckets(vel_kmh, plant_abs)
+    buckets = _build_buckets(vel_kmh, win_start, plant_abs)
 
     # ── Write full annotated output ───────────────────────────────────────────
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
@@ -489,9 +516,10 @@ def analyze_video(
 
     out.release()
 
-    full_s = total / fps
+    full_s     = total / fps
+    trimmed_s  = (win_end - win_start) / fps
     print(
-        f"[analyzer] output={full_s:.1f}s  "
+        f"[analyzer] output={full_s:.1f}s  trimmed={trimmed_s:.1f}s  "
         f"avg={avg_kmh:.1f} km/h  peak={peak_kmh:.1f} km/h"
     )
 
@@ -549,7 +577,7 @@ def analyze_video(
         "pole_plant_frame": plant_abs,
         "total_frames":     total,
         "fps":              fps,
-        "trimmed_seconds":  round(full_s, 1),
+        "trimmed_seconds":  round(trimmed_s, 1),
         "original_frames":  total,
     }
 

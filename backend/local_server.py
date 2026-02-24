@@ -14,6 +14,7 @@ No same-WiFi required. Works from anywhere.
 """
 
 import base64
+import datetime
 import json
 import os
 import sys
@@ -69,13 +70,16 @@ async def analyze(
 
     video_bytes = await video.read()
 
-    # Always save latest upload so we can debug locally without the phone
-    debug_video_path = Path(__file__).parent / "debug_last_video.mp4"
+    # Save every uploaded video with a timestamp so examples are never overwritten
+    saved_dir = Path(__file__).parent / "saved_videos"
+    saved_dir.mkdir(exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    saved_video_path = saved_dir / f"{ts}_{athlete_id}_raw.mp4"
     try:
-        debug_video_path.write_bytes(video_bytes)
-        print(f"[debug] saved debug_last_video.mp4 ({len(video_bytes)//1024} KB)")
+        saved_video_path.write_bytes(video_bytes)
+        print(f"[debug] saved {saved_video_path.name} ({len(video_bytes)//1024} KB)")
     except Exception as e:
-        print(f"[debug] could not save debug video: {e}")
+        print(f"[debug] could not save video: {e}")
 
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f_in:
         f_in.write(video_bytes)
@@ -95,7 +99,16 @@ async def analyze(
         _save_history(history)
 
         with open(output_path, "rb") as f:
-            video_b64 = base64.b64encode(f.read()).decode()
+            video_bytes_out = f.read()
+        video_b64 = base64.b64encode(video_bytes_out).decode()
+
+        # Also persist the annotated video next to the raw input
+        try:
+            annotated_path = saved_dir / f"{ts}_{athlete_id}_annotated.mp4"
+            annotated_path.write_bytes(video_bytes_out)
+            print(f"[debug] saved {annotated_path.name}")
+        except Exception as e:
+            print(f"[debug] could not save annotated video: {e}")
 
         return JSONResponse({"stats": stats, "video_b64": video_b64})
 
