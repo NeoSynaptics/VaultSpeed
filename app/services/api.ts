@@ -47,12 +47,28 @@ export async function analyzeVideo(
 
   onProgress?.(10);
 
+  // Crawl the progress bar from 10 → 65 while the server processes.
+  // Ticks every 500 ms at ~0.7 %/tick → reaches 65 % in ~78 s.
+  // Cleared as soon as the response arrives so it snaps to the real value.
+  let crawlPct = 10;
+  const crawlTimer = onProgress
+    ? setInterval(() => {
+        crawlPct = Math.min(crawlPct + 0.7, 65);
+        onProgress(Math.round(crawlPct));
+      }, 500)
+    : null;
+
   const apiUrl = await getApiUrl();
-  const response = await fetch(`${apiUrl}/analyze`, {
-    method: "POST",
-    headers: { "bypass-tunnel-reminder": "true" },
-    body: formData,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${apiUrl}/analyze`, {
+      method: "POST",
+      headers: { "bypass-tunnel-reminder": "true" },
+      body: formData,
+    });
+  } finally {
+    if (crawlTimer !== null) clearInterval(crawlTimer);
+  }
 
   if (!response.ok) {
     const text = await response.text();
