@@ -323,14 +323,14 @@ def find_run_window(velocities: list[float], fps: float) -> tuple[int, int, int]
     n = len(s)
 
     if n == 0:
-        return 0, n
+        return 0, n, 0
 
     skip     = max(3, n // 15)   # smaller skip: don't miss an early peak
     peak_idx = skip + int(np.argmax(s[skip:]))
     peak_v   = s[peak_idx]
 
     if peak_v < 1.0:
-        return 0, n
+        return 0, n, 0
 
     drop_thresh = peak_v * PLANT_DROP
     end_frame   = n
