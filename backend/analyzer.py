@@ -470,15 +470,40 @@ def analyze_video(
             width, height = height, width
         print(f"[analyzer] {total} frames @ {fps:.1f}fps  {width}x{height}  rotation={rotation_meta}")
 
+    # ── Resize to max 640px wide — YOLO resizes internally anyway, so this is
+    # free speed and cuts memory usage 4-8x compared to raw 720p/1080p frames.
+    MAX_WIDTH = 640
+    if width > MAX_WIDTH:
+        scale  = MAX_WIDTH / width
+        width  = MAX_WIDTH
+        height = int(height * scale)
+    else:
+        scale = 1.0
+
+    # ── For high-fps video (>32fps) keep only every other frame — halves YOLO
+    # calls with no meaningful loss for tracking or speed measurement.
+    frame_step = 2 if fps > 32 else 1
+    effective_fps = fps / frame_step
+
     frames = []
+    fi_raw = 0
     while True:
         ok, f = cap.read()
         if not ok:
             break
-        if rotate_code is not None:
-            f = cv2.rotate(f, rotate_code)
-        frames.append(f)
+        if fi_raw % frame_step == 0:
+            if rotate_code is not None:
+                f = cv2.rotate(f, rotate_code)
+            if scale != 1.0:
+                f = cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA)
+            frames.append(f)
+        fi_raw += 1
     cap.release()
+
+    fps   = effective_fps   # downstream speed math uses this fps
+    total = len(frames)     # actual processed frame count
+    print(f"[analyzer] loaded {total} frames @ {fps:.1f}fps  {width}x{height}  "
+          f"(step={frame_step} scale={scale:.2f})")
 
     if not frames:
         raise ValueError("No frames read")
