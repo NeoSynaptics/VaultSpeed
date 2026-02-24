@@ -47,13 +47,13 @@ export async function analyzeVideo(
 
   onProgress?.(10);
 
-  // Crawl the progress bar from 10 → 65 while the server processes.
-  // Ticks every 500 ms at ~0.7 %/tick → reaches 65 % in ~78 s.
-  // Cleared as soon as the response arrives so it snaps to the real value.
+  // Crawl the progress bar asymptotically toward 95% while the server processes.
+  // Step shrinks as pct rises so it always looks alive but never hits 100.
+  // Cleared the instant the response arrives, then snaps to real values.
   let crawlPct = 10;
   const crawlTimer = onProgress
     ? setInterval(() => {
-        crawlPct = Math.min(crawlPct + 0.7, 65);
+        crawlPct += (95 - crawlPct) * 0.03;
         onProgress(Math.round(crawlPct));
       }, 500)
     : null;
