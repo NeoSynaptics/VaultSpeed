@@ -160,4 +160,4 @@ if __name__ == "__main__":
     t.join(timeout=6)   # wait up to 6s for URL to print before server logs flood output
 
     print(f"[server] Starting on http://0.0.0.0:{PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=PORT, reload=False)
+    uvicorn.run("local_server:app", host="0.0.0.0", port=PORT, reload=True)
