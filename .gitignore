@@ -17,7 +17,16 @@ backend/debug_test_output.mp4
 backend/test_annotated.mp4
 backend/test_out.mp4
 backend/test_run.mp4
+backend/test_fixed_output.mp4
+backend/test_verify.mp4
 backend/run_history.json
+backend/saved_videos/
+backend/test_output/
+
+## Python cache (all locations)
+**/__pycache__/
+**/*.pyc
+**/*.pyo
 
 ## Expo / React Native
 app/node_modules/
