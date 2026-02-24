@@ -313,10 +313,11 @@ def smooth(v: list[float], window: int = 9) -> list[float]:
 
 
 # ─── Smart run window detection ───────────────────────────────────────────────
-def find_run_window(velocities: list[float], fps: float) -> tuple[int, int]:
+def find_run_window(velocities: list[float], fps: float) -> tuple[int, int, int]:
     """
-    Returns (start_frame, end_frame) wrapping the approach run.
-    Works on any velocity unit (px/s or km/h) because it uses % thresholds.
+    Returns (start_frame, end_frame, onset_frame).
+    start_frame includes a visual buffer before the run.
+    onset_frame is where the athlete actually starts accelerating.
     """
     s = smooth(velocities, window=9)
     n = len(s)
@@ -356,7 +357,7 @@ def find_run_window(velocities: list[float], fps: float) -> tuple[int, int]:
         f"window=[{start_frame}, {end_with_tail}]  "
         f"({(end_with_tail - start_frame) / fps:.1f}s)"
     )
-    return start_frame, end_with_tail
+    return start_frame, end_with_tail, onset_frame
 
 
 # ─── Speed bar overlay ────────────────────────────────────────────────────────
@@ -490,21 +491,54 @@ def analyze_video(
     tracker = RunnerTracker()
     centroids, bbox_heights, raw_bboxes = tracker.track(frames)
 
+    # ── Post-tracking cleanup: reject ID switches ────────────────────────────
+    # After the pole plant the tracker often locks onto a spectator, pole tip,
+    # or the vaulter at bar height.  Two signals expose this:
+    #   1. bbox height drops well below the athlete's typical height
+    #   2. centroid teleports across the frame in a single step
+    # Mark affected frames as None, then re-interpolate so velocities stay
+    # smooth instead of spiking.
+    first_q = bbox_heights[:max(1, len(bbox_heights) // 4)]
+    ref_heights = [h for h in first_q if h is not None and h > 10]
+    if ref_heights:
+        ref_h = float(np.median(ref_heights))
+        min_h = ref_h * 0.40          # reject anything <40% of reference
+        invalidated = 0
+        for i in range(len(centroids)):
+            # Height check: tiny bbox = different/distant person
+            if bbox_heights[i] is not None and bbox_heights[i] < min_h:
+                centroids[i] = None
+                bbox_heights[i] = None
+                invalidated += 1
+            # Teleport check: centroid jumps >15% of frame size in either axis
+            if (i > 0 and centroids[i] is not None and centroids[i - 1] is not None):
+                dx = abs(centroids[i][0] - centroids[i - 1][0])
+                dy = abs(centroids[i][1] - centroids[i - 1][1])
+                if dx > width * 0.15 or dy > height * 0.15:
+                    centroids[i] = None
+                    bbox_heights[i] = None
+                    invalidated += 1
+        if invalidated:
+            print(f"[cleanup] invalidated {invalidated} frames  "
+                  f"(ref_h={ref_h:.0f}px  min_h={min_h:.0f}px)")
+            centroids    = RunnerTracker._fill_gaps(centroids)
+            bbox_heights = RunnerTracker._fill_gaps_1d(bbox_heights)
+
     # ── Velocity in km/h (bbox-height calibrated, x-axis only) ───────────────
     vel_kmh = smooth(compute_velocities_kmh(centroids, bbox_heights, fps))
 
     # ── Auto-detect run window ────────────────────────────────────────────────
-    win_start, win_end = find_run_window(vel_kmh, fps)
+    win_start, win_end, onset_frame = find_run_window(vel_kmh, fps)
     plant_abs = win_end - int(fps * TAIL_BUFFER)
 
-    # Stats: run portion only (onset → plant)
-    run_kmh  = [v for v in vel_kmh[win_start:plant_abs] if v > 0]
+    # Stats: onset → plant (excludes the pre-run visual buffer)
+    run_kmh  = [v for v in vel_kmh[onset_frame:plant_abs] if v > 0]
     avg_kmh  = float(np.mean(run_kmh))  if run_kmh else 0.0
     peak_kmh = float(np.max(run_kmh))   if run_kmh else 0.0
     delta    = (avg_kmh - prev_avg_kmh) if prev_avg_kmh is not None else None
 
     # ── Build buckets for bar chart ───────────────────────────────────────────
-    buckets = _build_buckets(vel_kmh, win_start, plant_abs)
+    buckets = _build_buckets(vel_kmh, onset_frame, plant_abs)
 
     # ── Write full annotated output ───────────────────────────────────────────
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
