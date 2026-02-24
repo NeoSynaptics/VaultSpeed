@@ -47,13 +47,13 @@ export async function analyzeVideo(
 
   onProgress?.(10);
 
-  // Crawl the progress bar asymptotically toward 95% while the server processes.
-  // Step shrinks as pct rises so it always looks alive but never hits 100.
+  // Linear crawl: +0.25% every 500ms → reaches 90% in ~5.5 min.
+  // Caps at 90 and stays there until the server responds.
   // Cleared the instant the response arrives, then snaps to real values.
   let crawlPct = 10;
   const crawlTimer = onProgress
     ? setInterval(() => {
-        crawlPct += (95 - crawlPct) * 0.03;
+        crawlPct = Math.min(crawlPct + 0.25, 90);
         onProgress(Math.round(crawlPct));
       }, 500)
     : null;
@@ -79,17 +79,24 @@ export async function analyzeVideo(
 
   const json = await response.json();
   const stats: AnalysisStats = json.stats;
-  const videoB64: string = json.video_b64;
+  const videoFilename: string = json.video_filename;
 
-  // Write annotated video to local cache
+  // Download the annotated video as a binary file — keeps the /analyze JSON
+  // response tiny so it passes through any tunnel without size limits.
   const outputUri = FileSystem.cacheDirectory + `annotated_${Date.now()}.mp4`;
-  await FileSystem.writeAsStringAsync(outputUri, videoB64, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
+  const downloadResult = await FileSystem.downloadAsync(
+    `${apiUrl}/video/${encodeURIComponent(videoFilename)}`,
+    outputUri,
+    { headers: { "bypass-tunnel-reminder": "true" } },
+  );
+
+  if (downloadResult.status !== 200) {
+    throw new Error(`Video download failed: HTTP ${downloadResult.status}`);
+  }
 
   onProgress?.(100);
 
-  return { stats, annotatedVideoUri: outputUri };
+  return { stats, annotatedVideoUri: downloadResult.uri };
 }
 
 export async function healthCheck(): Promise<boolean> {

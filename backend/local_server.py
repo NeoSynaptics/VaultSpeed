@@ -13,19 +13,17 @@ On startup it will:
 No same-WiFi required. Works from anywhere.
 """
 
-import base64
 import datetime
 import json
 import os
-import sys
 import tempfile
 import threading
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 from analyzer import analyze_video
 
@@ -38,7 +36,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-HISTORY_FILE = Path(__file__).parent / "run_history.json"
+HISTORY_FILE  = Path(__file__).parent / "run_history.json"
+ANNOTATED_DIR = Path(__file__).parent / "annotated_videos"
+ANNOTATED_DIR.mkdir(exist_ok=True)
 
 
 def _load_history() -> dict:
@@ -71,23 +71,24 @@ async def analyze(
 
     video_bytes = await video.read()
 
-    # Save every uploaded video with a timestamp so examples are never overwritten
+    # Save raw upload for debugging
     saved_dir = Path(__file__).parent / "saved_videos"
     saved_dir.mkdir(exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     src_tag = "lib" if source == "library" else "cam"
-    saved_video_path = saved_dir / f"{ts}_{athlete_id}_{src_tag}_raw.mp4"
     try:
-        saved_video_path.write_bytes(video_bytes)
-        print(f"[debug] saved {saved_video_path.name} ({len(video_bytes)//1024} KB)")
+        (saved_dir / f"{ts}_{athlete_id}_{src_tag}_raw.mp4").write_bytes(video_bytes)
+        print(f"[debug] saved raw ({len(video_bytes)//1024} KB)")
     except Exception as e:
-        print(f"[debug] could not save video: {e}")
+        print(f"[debug] could not save raw video: {e}")
 
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f_in:
         f_in.write(video_bytes)
         input_path = f_in.name
 
-    output_path = input_path.replace(".mp4", "_annotated.mp4")
+    # Annotated video stored in ANNOTATED_DIR, served via /video/{filename}
+    video_filename = f"{ts}_{athlete_id}_{src_tag}_annotated.mp4"
+    output_path = str(ANNOTATED_DIR / video_filename)
 
     try:
         stats = analyze_video(
@@ -101,26 +102,33 @@ async def analyze(
         history[athlete_id] = stats["avg_kmh"]
         _save_history(history)
 
-        with open(output_path, "rb") as f:
-            video_bytes_out = f.read()
-        video_b64 = base64.b64encode(video_bytes_out).decode()
+        print(f"[debug] annotated video ready: {video_filename} "
+              f"({Path(output_path).stat().st_size // 1024} KB)")
 
-        # Also persist the annotated video next to the raw input
-        try:
-            annotated_path = saved_dir / f"{ts}_{athlete_id}_{src_tag}_annotated.mp4"
-            annotated_path.write_bytes(video_bytes_out)
-            print(f"[debug] saved {annotated_path.name}")
-        except Exception as e:
-            print(f"[debug] could not save annotated video: {e}")
-
-        return JSONResponse({"stats": stats, "video_b64": video_b64})
+        # Return only stats + a download token — video is fetched separately
+        # so the JSON response stays small (< 1 KB) and tunnels don't choke.
+        return JSONResponse({"stats": stats, "video_filename": video_filename})
 
     finally:
-        for p in [input_path, output_path]:
-            try:
-                os.unlink(p)
-            except Exception:
-                pass
+        try:
+            os.unlink(input_path)
+        except Exception:
+            pass
+
+
+@app.get("/video/{filename}")
+def get_video(filename: str):
+    """Serve an annotated video file by name (binary MP4)."""
+    # Sanitise — strip any path separators to prevent directory traversal
+    safe_name = Path(filename).name
+    path = ANNOTATED_DIR / safe_name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Video not found")
+    return FileResponse(
+        path=str(path),
+        media_type="video/mp4",
+        filename=safe_name,
+    )
 
 
 # ─── ngrok tunnel ─────────────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ backend/test_fixed_output.mp4
 backend/test_verify.mp4
 backend/run_history.json
 backend/saved_videos/
+backend/annotated_videos/
 backend/test_output/
 
 ## Python cache (all locations)
