@@ -47,37 +47,60 @@ export async function analyzeVideo(
 
   onProgress?.(10);
 
-  // Linear crawl: +0.25% every 500ms → reaches 90% in ~5.5 min.
-  // Caps at 90 and stays there until the server responds.
-  // Cleared the instant the response arrives, then snaps to real values.
-  let crawlPct = 10;
-  const crawlTimer = onProgress
-    ? setInterval(() => {
-        crawlPct = Math.min(crawlPct + 0.25, 90);
-        onProgress(Math.round(crawlPct));
-      }, 500)
-    : null;
-
   const apiUrl = await getApiUrl();
-  let response: Response;
-  try {
-    response = await fetch(`${apiUrl}/analyze`, {
-      method: "POST",
-      headers: { "bypass-tunnel-reminder": "true" },
-      body: formData,
-    });
-  } finally {
-    if (crawlTimer !== null) clearInterval(crawlTimer);
-  }
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Server error ${response.status}: ${text}`);
+  // ── Phase 1: upload + server processing via XHR ─────────────────────────
+  // XHR gives real upload progress (10 → 60%).
+  // After upload completes the server processes; a slow crawl covers that gap.
+  const { status: httpStatus, body: responseText } = await new Promise<{
+    status: number;
+    body: string;
+  }>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    // Real upload progress: 10% → 60%
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) {
+        onProgress(Math.round(10 + (e.loaded / e.total) * 50));
+      }
+    };
+
+    // After upload finishes, crawl 60 → 68% while server processes
+    let crawlPct = 60;
+    let crawlTimer: ReturnType<typeof setInterval> | null = null;
+    xhr.upload.onloadend = () => {
+      onProgress?.(60);
+      crawlTimer = setInterval(() => {
+        crawlPct = Math.min(crawlPct + 0.15, 68);
+        onProgress?.(Math.round(crawlPct));
+      }, 500);
+    };
+
+    xhr.onload = () => {
+      if (crawlTimer) clearInterval(crawlTimer);
+      resolve({ status: xhr.status, body: xhr.responseText });
+    };
+    xhr.onerror = () => {
+      if (crawlTimer) clearInterval(crawlTimer);
+      reject(new Error("Network request failed — check tunnel URL in Settings"));
+    };
+    xhr.ontimeout = () => {
+      if (crawlTimer) clearInterval(crawlTimer);
+      reject(new Error("Request timed out — server may still be processing"));
+    };
+
+    xhr.open("POST", `${apiUrl}/analyze`);
+    xhr.setRequestHeader("bypass-tunnel-reminder", "true");
+    xhr.send(formData);
+  });
+
+  if (httpStatus < 200 || httpStatus >= 300) {
+    throw new Error(`Server error ${httpStatus}: ${responseText}`);
   }
 
   onProgress?.(70);
 
-  const json = await response.json();
+  const json = JSON.parse(responseText);
   const stats: AnalysisStats = json.stats;
   const videoFilename: string = json.video_filename;
 
