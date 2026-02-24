@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { StatusBar } from "expo-status-bar";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { AnalysisResult } from "./services/api";
+import { AnalysisResult, API_URL_KEY } from "./services/api";
 import SetupScreen from "./screens/SetupScreen";
 import CameraScreen from "./screens/CameraScreen";
 import ResultScreen from "./screens/ResultScreen";
@@ -13,7 +13,7 @@ export default function App() {
   const [result, setResult] = useState<AnalysisResult | null>(null);
 
   useEffect(() => {
-    AsyncStorage.getItem("runway_meters").then((v) => {
+    AsyncStorage.getItem(API_URL_KEY).then((v) => {
       if (v) setScreen("camera");
     });
   }, []);

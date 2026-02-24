@@ -6,3 +6,6 @@ uvicorn
 python-multipart
 pyngrok
 modal
+transformers>=4.45.0
+timm
+einops

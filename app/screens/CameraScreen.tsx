@@ -10,7 +10,6 @@ import {
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import * as MediaLibrary from "expo-media-library";
 import * as ImagePicker from "expo-image-picker";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { analyzeVideo, AnalysisResult } from "../services/api";
 
 interface Props {
@@ -38,14 +37,11 @@ export default function CameraScreen({ onResult, onSettings }: Props) {
   };
 
   // Shared analysis flow — same for recorded and picked videos
-  const runAnalysis = useCallback(async (videoUri: string) => {
+  const runAnalysis = useCallback(async (videoUri: string, source: "camera" | "library" = "camera") => {
     setStatus("uploading");
     setProgress(0);
     try {
-      const runway = parseFloat(
-        (await AsyncStorage.getItem("runway_meters")) ?? "40"
-      );
-      const result = await analyzeVideo(videoUri, runway, "default", setProgress);
+      const result = await analyzeVideo(videoUri, 1.7, "default", setProgress, source);
       onResult(result, videoUri);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -86,7 +82,7 @@ export default function CameraScreen({ onResult, onSettings }: Props) {
         videoExportPreset: ImagePicker.VideoExportPreset.MediumQuality,
       });
       if (picked.canceled || !picked.assets?.[0]?.uri) return;
-      await runAnalysis(picked.assets[0].uri);
+      await runAnalysis(picked.assets[0].uri, "library");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       Alert.alert("Error", msg);

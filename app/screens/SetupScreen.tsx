@@ -18,7 +18,6 @@ interface Props {
 type ConnStatus = "checking" | "ok" | "fail";
 
 export default function SetupScreen({ onDone }: Props) {
-  const [runway, setRunway] = useState("40");
   const [apiUrl, setApiUrl] = useState("");
   const [connStatus, setConnStatus] = useState<ConnStatus>("checking");
 
@@ -37,9 +36,6 @@ export default function SetupScreen({ onDone }: Props) {
   }, [apiUrl]);
 
   const save = async () => {
-    const meters = parseFloat(runway);
-    if (isNaN(meters) || meters < 5 || meters > 100) return;
-    await AsyncStorage.setItem("runway_meters", String(meters));
     await AsyncStorage.setItem(API_URL_KEY, apiUrl.trim());
     onDone();
   };
@@ -54,21 +50,8 @@ export default function SetupScreen({ onDone }: Props) {
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <Text style={styles.title}>VaultSpeed</Text>
-      <Text style={styles.subtitle}>One-time setup</Text>
-
-      <Text style={styles.label}>Runway length (meters)</Text>
-      <Text style={styles.hint}>
-        Standard pole vault runway is 40–45 m. This calibrates pixel → km/h.
-      </Text>
-      <TextInput
-        style={styles.input}
-        value={runway}
-        onChangeText={setRunway}
-        keyboardType="decimal-pad"
-        placeholder="40"
-        placeholderTextColor="#555"
-      />
+      <Text style={styles.title}>VaultSpeed V1</Text>
+      <Text style={styles.subtitle}>Settings</Text>
 
       <View style={styles.apiRow}>
         <Text style={styles.label}>Backend URL</Text>
@@ -89,7 +72,7 @@ export default function SetupScreen({ onDone }: Props) {
       />
 
       <TouchableOpacity style={styles.button} onPress={save}>
-        <Text style={styles.buttonText}>Let's go</Text>
+        <Text style={styles.buttonText}>Save</Text>
       </TouchableOpacity>
     </KeyboardAvoidingView>
   );
@@ -119,17 +102,11 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     fontWeight: "600",
   },
-  hint: {
-    fontSize: 13,
-    color: "#555",
-    marginBottom: 12,
-    lineHeight: 18,
-  },
   input: {
     backgroundColor: "#1a1a1a",
     borderRadius: 10,
     padding: 16,
-    fontSize: 22,
+    fontSize: 18,
     color: "#fff",
     borderWidth: 1,
     borderColor: "#333",

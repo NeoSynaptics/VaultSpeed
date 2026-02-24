@@ -29,7 +29,8 @@ export async function analyzeVideo(
   localVideoUri: string,
   runwayMeters: number,
   athleteId: string = "default",
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  source: "camera" | "library" = "camera"
 ): Promise<AnalysisResult> {
   onProgress?.(5);
 
@@ -42,12 +43,14 @@ export async function analyzeVideo(
   } as unknown as Blob);
   formData.append("runway_meters", String(runwayMeters));
   formData.append("athlete_id", athleteId);
+  formData.append("source", source);
 
   onProgress?.(10);
 
   const apiUrl = await getApiUrl();
   const response = await fetch(`${apiUrl}/analyze`, {
     method: "POST",
+    headers: { "bypass-tunnel-reminder": "true" },
     body: formData,
   });
 
@@ -76,7 +79,10 @@ export async function analyzeVideo(
 export async function healthCheck(): Promise<boolean> {
   try {
     const apiUrl = await getApiUrl();
-    const r = await fetch(`${apiUrl}/health`, { method: "GET" });
+    const r = await fetch(`${apiUrl}/health`, {
+      method: "GET",
+      headers: { "bypass-tunnel-reminder": "true" },
+    });
     return r.ok;
   } catch {
     return false;

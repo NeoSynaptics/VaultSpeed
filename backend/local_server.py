@@ -64,6 +64,7 @@ async def analyze(
     video: UploadFile = File(...),
     runway_meters: float = Form(40.0),
     athlete_id: str = Form("default"),
+    source: str = Form("camera"),
 ):
     history = _load_history()
     prev_avg = history.get(athlete_id)
@@ -74,7 +75,8 @@ async def analyze(
     saved_dir = Path(__file__).parent / "saved_videos"
     saved_dir.mkdir(exist_ok=True)
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    saved_video_path = saved_dir / f"{ts}_{athlete_id}_raw.mp4"
+    src_tag = "lib" if source == "library" else "cam"
+    saved_video_path = saved_dir / f"{ts}_{athlete_id}_{src_tag}_raw.mp4"
     try:
         saved_video_path.write_bytes(video_bytes)
         print(f"[debug] saved {saved_video_path.name} ({len(video_bytes)//1024} KB)")
@@ -93,6 +95,7 @@ async def analyze(
             output_path=output_path,
             runway_meters=runway_meters,
             prev_avg_kmh=prev_avg,
+            source=source,
         )
 
         history[athlete_id] = stats["avg_kmh"]
@@ -104,7 +107,7 @@ async def analyze(
 
         # Also persist the annotated video next to the raw input
         try:
-            annotated_path = saved_dir / f"{ts}_{athlete_id}_annotated.mp4"
+            annotated_path = saved_dir / f"{ts}_{athlete_id}_{src_tag}_annotated.mp4"
             annotated_path.write_bytes(video_bytes_out)
             print(f"[debug] saved {annotated_path.name}")
         except Exception as e:

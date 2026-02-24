@@ -28,17 +28,45 @@ ONSET_PCT        = 0.20   # velocity below this % of peak = "not yet running"
 PLANT_DROP       = 0.40   # velocity drops to this % of peak = pole plant
 START_BUFFER     = 2.0    # seconds of buffer before detected onset
 TAIL_BUFFER      = 0.5    # seconds to keep after plant (shows the plant itself)
-ATHLETE_HEIGHT_M = 1.81   # Duplantis height (m) — temporary test value
+ATHLETE_HEIGHT_M = 1.70   # hardcoded average athlete height (m)
+
+# ─── Pose skeleton (COCO 17-keypoint layout) ─────────────────────────────────
+SKELETON = [
+    (0, 1), (0, 2), (1, 3), (2, 4),            # head
+    (5, 6),                                      # shoulders
+    (5, 7), (7, 9),                              # left arm
+    (6, 8), (8, 10),                             # right arm
+    (5, 11), (6, 12), (11, 12),                  # torso
+    (11, 13), (13, 15),                          # left leg
+    (12, 14), (14, 16),                          # right leg
+]
+LIMB_COLORS = [
+    (255, 255, 0), (255, 255, 0), (255, 255, 0), (255, 255, 0),   # head: cyan
+    (230, 230, 230),                                                # shoulders: white
+    (0, 255, 100), (0, 255, 100),                                   # left arm: green
+    (0, 165, 255), (0, 165, 255),                                   # right arm: orange
+    (230, 230, 230), (230, 230, 230), (230, 230, 230),             # torso: white
+    (255, 0, 200), (255, 0, 200),                                   # left leg: magenta
+    (0, 200, 255), (0, 200, 255),                                   # right leg: yellow
+]
+KP_CONF_THRESH = 0.3
 
 
 def speed_color(ratio: float) -> tuple:
-    """ratio = v / peak_v in this run (0-1)
-    Green = building (early run), yellow = mid, red = peak/plant (committed)"""
-    if ratio < 0.70:
-        return GREEN
-    elif ratio < 0.85:
-        return YELLOW
-    return RED
+    """Smooth green → yellow → red gradient based on speed ratio (0-1)."""
+    ratio = max(0.0, min(1.0, ratio))
+    # Green (0,200,50) → Yellow (0,200,220) → Red (0,50,220)
+    if ratio < 0.5:
+        t = ratio / 0.5
+        r = int(50 + t * 170)     # 50 → 220
+        g = 200
+        b = int(50 * (1 - t))     # 50 → 0
+    else:
+        t = (ratio - 0.5) / 0.5
+        r = 220
+        g = int(200 - t * 150)    # 200 → 50
+        b = 0
+    return (b, g, r)  # BGR
 
 
 # ─── YOLO person tracker ──────────────────────────────────────────────────────
@@ -49,171 +77,85 @@ class RunnerTracker:
     """
 
     def __init__(self):
-        self._model = None
+        self._det_model = None
+        self._pose_model = None
 
-    def _load_model(self):
+    def _load_models(self):
         from ultralytics import YOLO
-        self._model = YOLO("yolov8n.pt")
+        self._det_model = YOLO("yolov8n.pt")       # detection: high detection rate
+        self._pose_model = YOLO("yolov8n-pose.pt")  # pose: skeleton overlay only
 
-    def track(self, frames: list[np.ndarray]) -> tuple[list, list, list]:
+    def track_all(self, frames: list[np.ndarray]) -> dict:
         """
-        Returns (centroids, bbox_heights, bboxes).
+        Track ALL people using ByteTrack with persistent IDs.
 
-        Two-phase tracking:
-        Phase 1 (probe): Run YOLO on the first N_PROBE frames.  For each
-          candidate detected in frame 0, simulate tracking them forward and
-          compute their horizontal displacement.  The person who moves MOST
-          is the runner — spectators in the foreground are stationary.
-        Phase 2 (track): Process all frames with nearest-neighbor tracking
-          locked on the runner identified in Phase 1.
-
-        bboxes is a list of (x0,y0,x1,y1) tuples (or None) used for debug images.
+        Returns dict of tracks:
+        {track_id: {"centroids": [...], "heights": [...], "bboxes": [...]}}
+        Each list has len(frames) entries, with None for frames where that
+        person wasn't detected.
         """
-        if self._model is None:
-            self._load_model()
+        if self._det_model is None:
+            self._load_models()
 
-        N_PROBE = min(10, len(frames))
-        frame_h, frame_w = frames[0].shape[:2]
+        tracker_cfg = str(Path(__file__).parent / "tracker_config.yaml")
+        tracks: dict[int, dict] = {}
+        CONF = 0.15
 
-        # ── Phase 1: collect probe detections ─────────────────────────────
-        probe: list[tuple] = []   # (boxes_np, centers, areas, heights) per frame
-        for fi in range(N_PROBE):
-            res = self._model(frames[fi], classes=[0], verbose=False, conf=0.15)
+        for fi, frame in enumerate(frames):
+            results = self._det_model.track(
+                frame, persist=True, tracker=tracker_cfg,
+                conf=CONF, classes=[0], verbose=False,
+            )
+
             if fi < 3:
-                n_det = len(res[0].boxes) if res else 0
-                confs_str = ""
-                if res and n_det > 0:
-                    confs = res[0].boxes.conf.cpu().numpy().tolist()
-                    confs_str = "  confs=" + str([round(c, 3) for c in confs])
-                print(f"[tracker] frame{fi}: shape={frame_w}x{frame_h}"
-                      f"  dtype={frames[fi].dtype}  mean={frames[fi].mean():.1f}"
-                      f"  detections={n_det}{confs_str}")
-            if res and len(res[0].boxes) > 0:
-                boxes = res[0].boxes.xyxy.cpu().numpy()
-                areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
-                centers = [((b[0]+b[2])/2, (b[1]+b[3])/2) for b in boxes]
-                heights = [float(b[3]-b[1]) for b in boxes]
-                probe.append((boxes, centers, list(areas), heights))
-            else:
-                probe.append((np.zeros((0, 4)), [], [], []))
+                n_det = len(results[0].boxes) if results else 0
+                has_ids = results[0].boxes.id is not None if results else False
+                print(f"[tracker] frame{fi}: detections={n_det}  has_ids={has_ids}")
 
-        # ── Phase 1: pick the runner ───────────────────────────────────────
-        # For each candidate in frame 0, follow them through the probe frames
-        # and measure horizontal displacement.  Most-moving = the runner.
-        last_pos: Optional[tuple[float, float]] = None
+            if results[0].boxes.id is None:
+                # No detections this frame — extend all active tracks with None
+                for tid in tracks:
+                    tracks[tid]["centroids"].append(None)
+                    tracks[tid]["heights"].append(None)
+                    tracks[tid]["bboxes"].append(None)
+                continue
 
-        if probe and len(probe[0][1]) > 0:
-            boxes0, centers0, areas0, _ = probe[0]
-            n_cands = len(centers0)
-            max_jump = 0.35 * frame_w   # max pixel jump between consecutive frames
+            track_ids = results[0].boxes.id.int().cpu().tolist()
+            bboxes = results[0].boxes.xyxy.cpu().numpy()
 
-            best_idx  = int(np.argmax(areas0))   # fallback: largest person
-            best_disp = -1.0
+            seen_this_frame: set[int] = set()
+            for j, tid in enumerate(track_ids):
+                b = bboxes[j]
+                cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+                h = float(b[3] - b[1])
+                bbox = (float(b[0]), float(b[1]), float(b[2]), float(b[3]))
 
-            for ci in range(n_cands):
-                pos = centers0[ci]
-                x0  = pos[0]
-                for fi in range(1, len(probe)):
-                    _, centers, _, _ = probe[fi]
-                    if not centers:
-                        break
-                    dists = [np.hypot(c[0]-pos[0], c[1]-pos[1]) for c in centers]
-                    nearest = int(np.argmin(dists))
-                    if dists[nearest] < max_jump:
-                        pos = centers[nearest]
-                x_disp = abs(pos[0] - x0)
-                if x_disp > best_disp:
-                    best_disp = x_disp
-                    best_idx  = ci
+                if tid not in tracks:
+                    # New track — backfill with None for all previous frames
+                    tracks[tid] = {
+                        "centroids": [None] * fi,
+                        "heights": [None] * fi,
+                        "bboxes": [None] * fi,
+                    }
 
-            print(f"[tracker] runner: cand={best_idx}/{n_cands}"
-                  f"  x_disp={best_disp:.1f}px"
-                  f"  start_cx={centers0[best_idx][0]:.1f}")
-            last_pos = centers0[best_idx]
+                tracks[tid]["centroids"].append((cx, cy))
+                tracks[tid]["heights"].append(h)
+                tracks[tid]["bboxes"].append(bbox)
+                seen_this_frame.add(tid)
 
-        # ── Phase 2: build full track ──────────────────────────────────────
-        # Uses velocity-extrapolated position prediction AND a maximum-jump
-        # guard: any candidate further than max_jump from the predicted pos
-        # is rejected, preventing the tracker from teleporting to a different
-        # person when the runner moves quickly.
-        raw_centroids: list[Optional[tuple[float, float]]] = []
-        raw_heights:   list[Optional[float]]               = []
-        raw_bboxes:    list[Optional[tuple]]               = []
-        prev_pos: Optional[tuple[float, float]] = None   # one frame behind last_pos
+            # Tracks not seen this frame get None
+            for tid in tracks:
+                if tid not in seen_this_frame:
+                    tracks[tid]["centroids"].append(None)
+                    tracks[tid]["heights"].append(None)
+                    tracks[tid]["bboxes"].append(None)
 
-        def _predict(last, prev):
-            """First-order extrapolation: next ≈ last + (last - prev)."""
-            if last is None or prev is None:
-                return last
-            return (2*last[0] - prev[0], 2*last[1] - prev[1])
+        # Summary
+        for tid, t in tracks.items():
+            det_count = sum(1 for c in t["centroids"] if c is not None)
+            print(f"[tracker] track {tid}: {det_count}/{len(frames)} frames detected")
 
-        def _process(boxes, areas, centers, heights):
-            nonlocal last_pos, prev_pos
-            if not centers:
-                raw_centroids.append(None)
-                raw_heights.append(None)
-                raw_bboxes.append(None)
-                return
-
-            pred = _predict(last_pos, prev_pos)
-            anchor = pred if pred is not None else last_pos
-
-            # Max jump: if we have velocity history use it (2× measured step),
-            # otherwise fall back to 40% of frame width.
-            if last_pos is not None and prev_pos is not None:
-                step_px = np.hypot(last_pos[0]-prev_pos[0], last_pos[1]-prev_pos[1])
-                max_jump = max(60, step_px * 2.5)
-            else:
-                max_jump = 0.40 * frame_w
-
-            if anchor is not None:
-                dists = [np.hypot(c[0]-anchor[0], c[1]-anchor[1]) for c in centers]
-                # Only consider candidates within max_jump of predicted position
-                valid = [(i, d) for i, d in enumerate(dists) if d <= max_jump]
-                if valid:
-                    scores = [areas[i] / (d + 50) for i, d in valid]
-                    idx = valid[int(np.argmax(scores))][0]
-                else:
-                    # No candidate close enough — runner temporarily out of frame
-                    raw_centroids.append(None)
-                    raw_heights.append(None)
-                    raw_bboxes.append(None)
-                    return
-            else:
-                idx = int(np.argmax(areas))
-
-            center = centers[idx]
-            prev_pos = last_pos
-            last_pos = center
-            raw_centroids.append(center)
-            raw_heights.append(heights[idx])
-            b = boxes[idx]
-            raw_bboxes.append((float(b[0]), float(b[1]), float(b[2]), float(b[3])))
-
-        # Replay probe frames with the selected runner as anchor
-        for fi in range(N_PROBE):
-            boxes, centers, areas, heights = probe[fi]
-            _process(boxes, areas, centers, heights)
-
-        # Continue with remaining frames
-        for frame in frames[N_PROBE:]:
-            res = self._model(frame, classes=[0], verbose=False, conf=0.15)
-            if res and len(res[0].boxes) > 0:
-                boxes   = res[0].boxes.xyxy.cpu().numpy()
-                areas   = list((boxes[:, 2]-boxes[:, 0]) * (boxes[:, 3]-boxes[:, 1]))
-                centers = [((b[0]+b[2])/2, (b[1]+b[3])/2) for b in boxes]
-                heights = [float(b[3]-b[1]) for b in boxes]
-                _process(boxes, areas, centers, heights)
-            else:
-                raw_centroids.append(None)
-                raw_heights.append(None)
-                raw_bboxes.append(None)
-
-        return (
-            self._fill_gaps(raw_centroids),
-            self._fill_gaps_1d(raw_heights),
-            raw_bboxes,
-        )
+        return tracks
 
     @staticmethod
     def _fill_gaps(pts: list) -> list:
@@ -259,6 +201,40 @@ class RunnerTracker:
             elif i > 0:
                 result[i] = result[i - 1]
         return result
+
+    def extract_poses(self, frames: list[np.ndarray], bboxes: list) -> list:
+        """Run pose model on each frame, match keypoints to tracked bboxes."""
+        if self._pose_model is None:
+            self._load_models()
+
+        n = len(frames)
+        keypoints = [None] * n
+        detected = 0
+
+        for i in range(n):
+            bbox = bboxes[i] if i < len(bboxes) else None
+            if bbox is None:
+                continue
+
+            res = self._pose_model(frames[i], verbose=False, conf=0.10)
+            if not res or len(res[0].boxes) == 0 or res[0].keypoints is None:
+                continue
+
+            # Find pose detection closest to tracked bbox center
+            tx = (bbox[0] + bbox[2]) / 2
+            ty = (bbox[1] + bbox[3]) / 2
+            boxes = res[0].boxes.xyxy.cpu().numpy()
+            kps_data = res[0].keypoints.data.cpu().numpy()
+
+            dists = [np.hypot((b[0]+b[2])/2 - tx, (b[1]+b[3])/2 - ty) for b in boxes]
+            best = int(np.argmin(dists))
+
+            if best < len(kps_data):
+                keypoints[i] = kps_data[best]
+                detected += 1
+
+        print(f"[pose] extracted keypoints for {detected}/{n} frames")
+        return keypoints
 
 
 # ─── Velocity computation ─────────────────────────────────────────────────────
@@ -360,6 +336,30 @@ def find_run_window(velocities: list[float], fps: float) -> tuple[int, int, int]
     return start_frame, end_with_tail, onset_frame
 
 
+# ─── Pose skeleton overlay ───────────────────────────────────────────────────
+def draw_pose(frame: np.ndarray, keypoints: np.ndarray) -> np.ndarray:
+    """Draw skeleton lines and keypoint dots for one person."""
+    h = frame.shape[0]
+    thickness = max(2, h // 200)
+    radius = max(3, h // 150)
+
+    # Skeleton lines
+    for li, (i, j) in enumerate(SKELETON):
+        if keypoints[i][2] > KP_CONF_THRESH and keypoints[j][2] > KP_CONF_THRESH:
+            pt1 = (int(keypoints[i][0]), int(keypoints[i][1]))
+            pt2 = (int(keypoints[j][0]), int(keypoints[j][1]))
+            cv2.line(frame, pt1, pt2, LIMB_COLORS[li], thickness, cv2.LINE_AA)
+
+    # Keypoint dots
+    for k in range(17):
+        if keypoints[k][2] > KP_CONF_THRESH:
+            pt = (int(keypoints[k][0]), int(keypoints[k][1]))
+            cv2.circle(frame, pt, radius, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(frame, pt, max(1, radius // 2), (0, 0, 0), 1, cv2.LINE_AA)
+
+    return frame
+
+
 # ─── Speed bar overlay ────────────────────────────────────────────────────────
 def _build_buckets(velocities_kmh: list[float], win_start: int, plant_local: int) -> list[float]:
     """10 equal-time buckets from run start to pole plant."""
@@ -430,6 +430,7 @@ def analyze_video(
     output_path:  str,
     runway_meters: float = 40.0,   # kept for API compat; no longer used for speed
     prev_avg_kmh: Optional[float] = None,
+    source:       str = "camera",  # "camera" or "library"
 ) -> dict:
     """
     Full pipeline:
@@ -448,23 +449,26 @@ def analyze_video(
     total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # ── Handle mobile phone rotation metadata ────────────────────────────────
-    # Phones embed a rotation angle in the MP4 container. OpenCV (FFMPEG backend)
-    # reads raw pixel data without applying it, so portrait videos appear sideways.
-    # This would make bbox heights wrong (person's width instead of height) and
-    # flip the dominant motion axis.
+    # Library-picked videos are already properly oriented by the OS export;
+    # only apply rotation for raw camera recordings.
     try:
         rotation_meta = int(cap.get(cv2.CAP_PROP_ORIENTATION_META))
     except (AttributeError, TypeError):
         rotation_meta = 0
-    rotate_code = {
-        90:  cv2.ROTATE_90_CLOCKWISE,
-        180: cv2.ROTATE_180,
-        270: cv2.ROTATE_90_COUNTERCLOCKWISE,
-    }.get(rotation_meta if rotation_meta in (90, 180, 270) else 0)
-    if rotate_code in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE):
-        width, height = height, width   # dimensions swap for 90/270
 
-    print(f"[analyzer] {total} frames @ {fps:.1f}fps  {width}x{height}  rotation={rotation_meta}°")
+    if source == "library":
+        rotate_code = None
+        print(f"[analyzer] {total} frames @ {fps:.1f}fps  {width}x{height}  "
+              f"rotation={rotation_meta} (skipped — library video)")
+    else:
+        rotate_code = {
+            90:  cv2.ROTATE_90_CLOCKWISE,
+            180: cv2.ROTATE_180,
+            270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+        }.get(rotation_meta if rotation_meta in (90, 180, 270) else 0)
+        if rotate_code in (cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_90_COUNTERCLOCKWISE):
+            width, height = height, width
+        print(f"[analyzer] {total} frames @ {fps:.1f}fps  {width}x{height}  rotation={rotation_meta}")
 
     frames = []
     while True:
@@ -487,45 +491,72 @@ def analyze_video(
     except Exception as e:
         print(f"[debug] frame0 save failed: {e}")
 
-    # ── Track across full video ───────────────────────────────────────────────
-    tracker = RunnerTracker()
-    centroids, bbox_heights, raw_bboxes = tracker.track(frames)
+    # ── Track all people with ByteTrack ──────────────────────────────────────
+    from vaulter_identifier import VaulterIdentifier
 
-    # ── Post-tracking cleanup: reject ID switches ────────────────────────────
-    # After the pole plant the tracker often locks onto a spectator, pole tip,
-    # or the vaulter at bar height.  Two signals expose this:
-    #   1. bbox height drops well below the athlete's typical height
-    #   2. centroid teleports across the frame in a single step
-    # Mark affected frames as None, then re-interpolate so velocities stay
-    # smooth instead of spiking.
-    first_q = bbox_heights[:max(1, len(bbox_heights) // 4)]
-    ref_heights = [h for h in first_q if h is not None and h > 10]
-    if ref_heights:
-        ref_h = float(np.median(ref_heights))
-        min_h = ref_h * 0.40          # reject anything <40% of reference
-        invalidated = 0
-        for i in range(len(centroids)):
-            # Height check: tiny bbox = different/distant person
-            if bbox_heights[i] is not None and bbox_heights[i] < min_h:
+    tracker = RunnerTracker()
+    all_tracks = tracker.track_all(frames)
+
+    if not all_tracks:
+        print("[analyzer] warning: no people detected in video")
+        # Write a blank output video so the caller still gets a file
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        for frame in frames:
+            out.write(frame)
+        out.release()
+        return {
+            "avg_kmh": 0.0, "peak_kmh": 0.0, "delta_kmh": None,
+            "pole_plant_frame": 0, "total_frames": total,
+            "fps": fps, "trimmed_seconds": 0.0, "original_frames": total,
+        }
+
+    # ── Identify the pole vaulter ──────────────────────────────────────────
+    identifier = VaulterIdentifier()
+    best_id = identifier.identify(all_tracks, frames)
+    track = all_tracks[best_id]
+
+    # Extract single-track data
+    raw_bboxes   = track["bboxes"]
+    centroids    = RunnerTracker._fill_gaps(track["centroids"])
+    bbox_heights = RunnerTracker._fill_gaps_1d(track["heights"])
+
+    # ── Post-tracking cleanup: reject remaining anomalies ──────────────────
+    invalidated = 0
+    for i in range(1, len(centroids)):
+        if (bbox_heights[i] is not None and bbox_heights[i - 1] is not None
+                and bbox_heights[i - 1] > 10):
+            ratio = bbox_heights[i] / bbox_heights[i - 1]
+            if ratio < 0.4 or ratio > 2.5:
                 centroids[i] = None
                 bbox_heights[i] = None
+                raw_bboxes[i] = None
                 invalidated += 1
-            # Teleport check: centroid jumps >15% of frame size in either axis
-            if (i > 0 and centroids[i] is not None and centroids[i - 1] is not None):
-                dx = abs(centroids[i][0] - centroids[i - 1][0])
-                dy = abs(centroids[i][1] - centroids[i - 1][1])
-                if dx > width * 0.15 or dy > height * 0.15:
-                    centroids[i] = None
-                    bbox_heights[i] = None
-                    invalidated += 1
-        if invalidated:
-            print(f"[cleanup] invalidated {invalidated} frames  "
-                  f"(ref_h={ref_h:.0f}px  min_h={min_h:.0f}px)")
-            centroids    = RunnerTracker._fill_gaps(centroids)
-            bbox_heights = RunnerTracker._fill_gaps_1d(bbox_heights)
+                continue
+        if centroids[i] is not None and centroids[i - 1] is not None:
+            dx = abs(centroids[i][0] - centroids[i - 1][0])
+            dy = abs(centroids[i][1] - centroids[i - 1][1])
+            if dx > width * 0.15 or dy > height * 0.15:
+                centroids[i] = None
+                bbox_heights[i] = None
+                raw_bboxes[i] = None
+                invalidated += 1
+    if invalidated:
+        print(f"[cleanup] invalidated {invalidated} frames")
+        centroids    = RunnerTracker._fill_gaps(centroids)
+        bbox_heights = RunnerTracker._fill_gaps_1d(bbox_heights)
+
+    # ── Extract pose keypoints (separate pass with pose model) ─────────
+    all_keypoints = tracker.extract_poses(frames, raw_bboxes)
 
     # ── Velocity in km/h (bbox-height calibrated, x-axis only) ───────────────
     vel_kmh = smooth(compute_velocities_kmh(centroids, bbox_heights, fps))
+
+    # ── Speed spike filter: cap at physical maximum (no human > 45 km/h) ──
+    MAX_SPEED_KMH = 45.0
+    for i in range(len(vel_kmh)):
+        if vel_kmh[i] > MAX_SPEED_KMH:
+            vel_kmh[i] = MAX_SPEED_KMH
 
     # ── Auto-detect run window ────────────────────────────────────────────────
     win_start, win_end, onset_frame = find_run_window(vel_kmh, fps)
@@ -545,6 +576,9 @@ def analyze_video(
     out    = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
     for i, frame in enumerate(frames):
+        # Draw pose skeleton
+        if i < len(all_keypoints) and all_keypoints[i] is not None:
+            frame = draw_pose(frame, all_keypoints[i])
         frame = draw_bar(frame, buckets, i, plant_abs, avg_kmh, delta)
         out.write(frame)
 

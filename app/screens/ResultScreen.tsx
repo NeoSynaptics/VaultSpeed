@@ -113,10 +113,10 @@ const styles = StyleSheet.create({
   content: { paddingBottom: 40 },
   videoWrapper: {
     width: "100%",
-    aspectRatio: 16 / 9,
+    height: 460,
     backgroundColor: "#111",
   },
-  video: { flex: 1 },
+  video: { width: "100%", height: "100%" },
   statsRow: {
     flexDirection: "row",
     justifyContent: "space-around",
