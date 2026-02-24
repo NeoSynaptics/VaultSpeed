@@ -237,6 +237,32 @@ class RunnerTracker:
         return keypoints
 
 
+# ─── Module-level singletons — models load once, stay in memory ───────────────
+# Creating RunnerTracker / VaulterIdentifier fresh on every request caused the
+# YOLO weights and V-JEPA2 (300 MB) to be loaded from disk each time.
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from vaulter_identifier import VaulterIdentifier as _VIType
+
+_tracker_singleton: "RunnerTracker | None" = None
+_identifier_singleton: "_VIType | None" = None
+
+
+def _get_tracker() -> "RunnerTracker":
+    global _tracker_singleton
+    if _tracker_singleton is None:
+        _tracker_singleton = RunnerTracker()
+    return _tracker_singleton
+
+
+def _get_identifier():
+    global _identifier_singleton
+    if _identifier_singleton is None:
+        from vaulter_identifier import VaulterIdentifier
+        _identifier_singleton = VaulterIdentifier()
+    return _identifier_singleton
+
+
 # ─── Velocity computation ─────────────────────────────────────────────────────
 def compute_velocities_kmh(
     centroids:    list,
@@ -517,9 +543,7 @@ def analyze_video(
         print(f"[debug] frame0 save failed: {e}")
 
     # ── Track all people with ByteTrack ──────────────────────────────────────
-    from vaulter_identifier import VaulterIdentifier
-
-    tracker = RunnerTracker()
+    tracker = _get_tracker()
     all_tracks = tracker.track_all(frames)
 
     if not all_tracks:
@@ -537,7 +561,7 @@ def analyze_video(
         }
 
     # ── Identify the pole vaulter ──────────────────────────────────────────
-    identifier = VaulterIdentifier()
+    identifier = _get_identifier()
     best_id = identifier.identify(all_tracks, frames)
     track = all_tracks[best_id]
 
