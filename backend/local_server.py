@@ -69,6 +69,14 @@ async def analyze(
 
     video_bytes = await video.read()
 
+    # Always save latest upload so we can debug locally without the phone
+    debug_video_path = Path(__file__).parent / "debug_last_video.mp4"
+    try:
+        debug_video_path.write_bytes(video_bytes)
+        print(f"[debug] saved debug_last_video.mp4 ({len(video_bytes)//1024} KB)")
+    except Exception as e:
+        print(f"[debug] could not save debug video: {e}")
+
     with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f_in:
         f_in.write(video_bytes)
         input_path = f_in.name

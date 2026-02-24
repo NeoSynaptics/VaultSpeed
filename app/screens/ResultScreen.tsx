@@ -1,10 +1,9 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  Alert,
   ScrollView,
 } from "react-native";
 import { VideoView, useVideoPlayer } from "expo-video";
@@ -16,23 +15,23 @@ interface Props {
   onRecordAgain: () => void;
 }
 
+type SaveStatus = "saving" | "saved" | "error";
+
 export default function ResultScreen({ result, onRecordAgain }: Props) {
   const { stats, annotatedVideoUri } = result;
-  const [saved, setSaved] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("saving");
 
   const player = useVideoPlayer(annotatedVideoUri, (p) => {
     p.loop = true;
     p.play();
   });
 
-  const saveToRoll = async () => {
-    try {
-      await MediaLibrary.saveToLibraryAsync(annotatedVideoUri);
-      setSaved(true);
-    } catch {
-      Alert.alert("Error", "Could not save video to camera roll.");
-    }
-  };
+  // Auto-save annotated video to camera roll as soon as screen mounts
+  useEffect(() => {
+    MediaLibrary.saveToLibraryAsync(annotatedVideoUri)
+      .then(() => setSaveStatus("saved"))
+      .catch(() => setSaveStatus("error"));
+  }, [annotatedVideoUri]);
 
   const deltaColor =
     stats.delta_kmh === null
@@ -40,6 +39,16 @@ export default function ResultScreen({ result, onRecordAgain }: Props) {
       : stats.delta_kmh >= 0
       ? "#4cde80"
       : "#e5242f";
+
+  const saveLabel =
+    saveStatus === "saved"
+      ? "✓ Saved to camera roll"
+      : saveStatus === "error"
+      ? "⚠ Could not save to camera roll"
+      : "Saving to camera roll…";
+
+  const saveLabelColor =
+    saveStatus === "saved" ? "#4cde80" : saveStatus === "error" ? "#e5242f" : "#888";
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -62,23 +71,15 @@ export default function ResultScreen({ result, onRecordAgain }: Props) {
         )}
       </View>
 
-      {/* Info */}
+      {/* Info row */}
       <Text style={styles.subtext}>
         {stats.trimmed_seconds?.toFixed(1)}s clip (trimmed from{" "}
         {(stats.original_frames / stats.fps).toFixed(1)}s) •{" "}
         plant @{stats.pole_plant_frame}f • {stats.fps.toFixed(0)} fps
       </Text>
 
-      {/* Buttons */}
-      <TouchableOpacity
-        style={[styles.button, saved && styles.buttonSaved]}
-        onPress={saveToRoll}
-        disabled={saved}
-      >
-        <Text style={styles.buttonText}>
-          {saved ? "Saved to Camera Roll" : "Save Annotated Video"}
-        </Text>
-      </TouchableOpacity>
+      {/* Auto-save status */}
+      <Text style={[styles.saveStatus, { color: saveLabelColor }]}>{saveLabel}</Text>
 
       <TouchableOpacity style={styles.secondaryButton} onPress={onRecordAgain}>
         <Text style={styles.secondaryButtonText}>Record Again</Text>
@@ -136,19 +137,15 @@ const styles = StyleSheet.create({
     color: "#444",
     fontSize: 12,
     textAlign: "center",
-    marginBottom: 24,
+    marginBottom: 8,
     paddingHorizontal: 16,
   },
-  button: {
-    backgroundColor: "#e5242f",
-    borderRadius: 12,
-    padding: 18,
-    alignItems: "center",
-    marginHorizontal: 20,
-    marginBottom: 12,
+  saveStatus: {
+    fontSize: 12,
+    textAlign: "center",
+    marginBottom: 28,
+    fontWeight: "600",
   },
-  buttonSaved: { backgroundColor: "#2a2a2a" },
-  buttonText: { color: "#fff", fontSize: 16, fontWeight: "700" },
   secondaryButton: {
     borderRadius: 12,
     padding: 16,

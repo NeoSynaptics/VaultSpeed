@@ -9,16 +9,18 @@ import {
 } from "react-native";
 import { CameraView, useCameraPermissions, useMicrophonePermissions } from "expo-camera";
 import * as MediaLibrary from "expo-media-library";
+import * as ImagePicker from "expo-image-picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { analyzeVideo, AnalysisResult } from "../services/api";
 
 interface Props {
   onResult: (result: AnalysisResult, originalUri: string) => void;
+  onSettings: () => void;
 }
 
 type Status = "idle" | "recording" | "uploading";
 
-export default function CameraScreen({ onResult }: Props) {
+export default function CameraScreen({ onResult, onSettings }: Props) {
   const cameraRef = useRef<CameraView>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [progress, setProgress] = useState(0);
@@ -35,39 +37,61 @@ export default function CameraScreen({ onResult }: Props) {
     if (!mediaPermission?.granted) await requestMediaPermission();
   };
 
-  const startRecording = useCallback(async () => {
-    if (!cameraRef.current || status !== "idle") return;
-    setStatus("recording");
+  // Shared analysis flow — same for recorded and picked videos
+  const runAnalysis = useCallback(async (videoUri: string) => {
+    setStatus("uploading");
+    setProgress(0);
     try {
-      // startRecording resolves when stopRecording is called
-      const video = await cameraRef.current.recordAsync({ maxDuration: 30 });
-      if (!video?.uri) return;
-
-      setStatus("uploading");
-      setProgress(0);
-
-      // Save original to camera roll immediately
-      await MediaLibrary.saveToLibraryAsync(video.uri);
-
-      // Upload + analyze
       const runway = parseFloat(
         (await AsyncStorage.getItem("runway_meters")) ?? "40"
       );
-
-      const result = await analyzeVideo(video.uri, runway, "default", setProgress);
-      onResult(result, video.uri);
+      const result = await analyzeVideo(videoUri, runway, "default", setProgress);
+      onResult(result, videoUri);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       Alert.alert("Error", msg);
       setStatus("idle");
     }
-  }, [status, onResult]);
+  }, [onResult]);
+
+  const startRecording = useCallback(async () => {
+    if (!cameraRef.current || status !== "idle") return;
+    setStatus("recording");
+    try {
+      const video = await cameraRef.current.recordAsync({ maxDuration: 30 });
+      if (!video?.uri) { setStatus("idle"); return; }
+      // Save raw to camera roll immediately
+      await MediaLibrary.saveToLibraryAsync(video.uri);
+      await runAnalysis(video.uri);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert("Error", msg);
+      setStatus("idle");
+    }
+  }, [status, runAnalysis]);
 
   const stopRecording = useCallback(() => {
     if (status === "recording") {
       cameraRef.current?.stopRecording();
     }
   }, [status]);
+
+  const pickFromLibrary = useCallback(async () => {
+    if (status !== "idle") return;
+    try {
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["videos"],
+        allowsEditing: false,
+        quality: 1,
+        videoExportPreset: ImagePicker.VideoExportPreset.MediumQuality,
+      });
+      if (picked.canceled || !picked.assets?.[0]?.uri) return;
+      await runAnalysis(picked.assets[0].uri);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert("Error", msg);
+    }
+  }, [status, runAnalysis]);
 
   if (!allGranted) {
     return (
@@ -90,11 +114,15 @@ export default function CameraScreen({ onResult }: Props) {
         videoQuality="720p"
       />
 
-      {/* Overlay */}
+      {/* Settings button */}
+      {status === "idle" && (
+        <TouchableOpacity style={styles.settingsButton} onPress={onSettings}>
+          <Text style={styles.settingsIcon}>⚙</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Status overlay */}
       <View style={styles.overlay}>
-        {status === "idle" && (
-          <Text style={styles.hint}>Hold to record</Text>
-        )}
         {status === "recording" && (
           <View style={styles.recIndicator}>
             <View style={styles.recDot} />
@@ -111,21 +139,38 @@ export default function CameraScreen({ onResult }: Props) {
         )}
       </View>
 
-      {/* Record button */}
+      {/* Bottom controls */}
       {status !== "uploading" && (
         <View style={styles.buttonArea}>
+          {/* Library picker — left of record button */}
           <TouchableOpacity
-            style={[styles.recordButton, status === "recording" && styles.recordingActive]}
-            onLongPress={startRecording}
-            onPressOut={stopRecording}
-            delayLongPress={100}
-            activeOpacity={0.8}
+            style={styles.libraryButton}
+            onPress={pickFromLibrary}
+            disabled={status !== "idle"}
+            activeOpacity={0.7}
           >
-            <View style={[styles.recordInner, status === "recording" && styles.recordStop]} />
+            <Text style={styles.libraryIcon}>▶</Text>
+            <Text style={styles.libraryLabel}>Library</Text>
           </TouchableOpacity>
-          <Text style={styles.buttonHint}>
-            {status === "idle" ? "Hold to record" : "Release to stop"}
-          </Text>
+
+          {/* Record button — centre */}
+          <View style={styles.recordColumn}>
+            <TouchableOpacity
+              style={[styles.recordButton, status === "recording" && styles.recordingActive]}
+              onLongPress={startRecording}
+              onPressOut={stopRecording}
+              delayLongPress={100}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.recordInner, status === "recording" && styles.recordStop]} />
+            </TouchableOpacity>
+            <Text style={styles.buttonHint}>
+              {status === "idle" ? "Hold to record" : "Release to stop"}
+            </Text>
+          </View>
+
+          {/* Spacer to keep record button centred */}
+          <View style={styles.libraryButton} />
         </View>
       )}
     </View>
@@ -141,7 +186,6 @@ const styles = StyleSheet.create({
     right: 0,
     alignItems: "center",
   },
-  hint: { color: "rgba(255,255,255,0.6)", fontSize: 14 },
   recIndicator: {
     flexDirection: "row",
     alignItems: "center",
@@ -165,6 +209,12 @@ const styles = StyleSheet.create({
     bottom: 50,
     left: 0,
     right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-around",
+    paddingHorizontal: 32,
+  },
+  recordColumn: {
     alignItems: "center",
   },
   recordButton: {
@@ -193,6 +243,31 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.5)",
     fontSize: 12,
     marginTop: 10,
+  },
+  libraryButton: {
+    width: 64,
+    alignItems: "center",
+    gap: 4,
+  },
+  libraryIcon: {
+    fontSize: 28,
+    color: "rgba(255,255,255,0.75)",
+  },
+  libraryLabel: {
+    color: "rgba(255,255,255,0.5)",
+    fontSize: 11,
+    fontWeight: "600",
+  },
+  settingsButton: {
+    position: "absolute",
+    top: 56,
+    right: 20,
+    zIndex: 10,
+    padding: 8,
+  },
+  settingsIcon: {
+    fontSize: 22,
+    color: "rgba(255,255,255,0.6)",
   },
   permissionContainer: {
     flex: 1,

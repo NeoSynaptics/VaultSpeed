@@ -30,7 +30,7 @@ export default function App() {
         <SetupScreen onDone={() => setScreen("camera")} />
       )}
       {screen === "camera" && (
-        <CameraScreen onResult={handleResult} />
+        <CameraScreen onResult={handleResult} onSettings={() => setScreen("setup")} />
       )}
       {screen === "result" && result && (
         <ResultScreen

@@ -1,20 +1,34 @@
-## Backend
+## Backend — Python
 backend/__pycache__/
 backend/*.pyc
 backend/.env
+backend/.venv/
+backend/env2/
+
+## Backend — YOLO model weights (auto-downloaded on first run)
 *.pt
+
+## Backend — runtime / debug artefacts (generated each run, not source)
+backend/debug_*.jpg
+backend/debug_*.mp4
+backend/debug_last_run.json
+backend/debug_test_frame0.jpg
+backend/debug_test_output.mp4
+backend/test_annotated.mp4
+backend/test_out.mp4
+backend/test_run.mp4
+backend/run_history.json
 
 ## Expo / React Native
 app/node_modules/
 app/.expo/
 app/dist/
 app/.env
+app/package-lock.json
 
 ## OS
 .DS_Store
 Thumbs.db
-
-backend/run_history.json
 
 ## Misc
 *.log

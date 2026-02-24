@@ -15,6 +15,7 @@
     "expo-av": "~16.0.8",
     "expo-camera": "~17.0.10",
     "expo-file-system": "~19.0.21",
+    "expo-image-picker": "^17.0.10",
     "expo-media-library": "~18.2.1",
     "expo-status-bar": "~3.0.9",
     "expo-video": "~3.0.16",

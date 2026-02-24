@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -9,20 +9,45 @@ import {
   Platform,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { healthCheck, getApiUrl, API_URL_KEY } from "../services/api";
 
 interface Props {
   onDone: () => void;
 }
 
+type ConnStatus = "checking" | "ok" | "fail";
+
 export default function SetupScreen({ onDone }: Props) {
   const [runway, setRunway] = useState("40");
+  const [apiUrl, setApiUrl] = useState("");
+  const [connStatus, setConnStatus] = useState<ConnStatus>("checking");
+
+  useEffect(() => {
+    getApiUrl().then(setApiUrl);
+  }, []);
+
+  useEffect(() => {
+    if (!apiUrl) return;
+    setConnStatus("checking");
+    const t = setTimeout(async () => {
+      const ok = await healthCheck();
+      setConnStatus(ok ? "ok" : "fail");
+    }, 400);
+    return () => clearTimeout(t);
+  }, [apiUrl]);
 
   const save = async () => {
     const meters = parseFloat(runway);
     if (isNaN(meters) || meters < 5 || meters > 100) return;
     await AsyncStorage.setItem("runway_meters", String(meters));
+    await AsyncStorage.setItem(API_URL_KEY, apiUrl.trim());
     onDone();
   };
+
+  const statusColor =
+    connStatus === "ok" ? "#4cde80" : connStatus === "fail" ? "#e5242f" : "#888";
+  const statusLabel =
+    connStatus === "ok" ? "Connected" : connStatus === "fail" ? "No connection" : "Checking…";
 
   return (
     <KeyboardAvoidingView
@@ -42,6 +67,24 @@ export default function SetupScreen({ onDone }: Props) {
         onChangeText={setRunway}
         keyboardType="decimal-pad"
         placeholder="40"
+        placeholderTextColor="#555"
+      />
+
+      <View style={styles.apiRow}>
+        <Text style={styles.label}>Backend URL</Text>
+        <View style={styles.connRow}>
+          <View style={[styles.connDot, { backgroundColor: statusColor }]} />
+          <Text style={[styles.connLabel, { color: statusColor }]}>{statusLabel}</Text>
+        </View>
+      </View>
+      <TextInput
+        style={styles.input}
+        value={apiUrl}
+        onChangeText={setApiUrl}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+        placeholder="https://xxxx.ngrok-free.app"
         placeholderTextColor="#555"
       />
 
@@ -102,5 +145,25 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 18,
     fontWeight: "700",
+  },
+  apiRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 6,
+  },
+  connRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  connDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  connLabel: {
+    fontSize: 12,
+    fontWeight: "600",
   },
 });

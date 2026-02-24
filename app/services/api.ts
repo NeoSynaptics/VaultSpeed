@@ -1,6 +1,13 @@
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000";
+const DEFAULT_API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000";
+export const API_URL_KEY = "api_url";
+
+export async function getApiUrl(): Promise<string> {
+  const stored = await AsyncStorage.getItem(API_URL_KEY);
+  return stored?.trim() || DEFAULT_API_URL;
+}
 
 export interface AnalysisStats {
   avg_kmh: number;
@@ -38,7 +45,8 @@ export async function analyzeVideo(
 
   onProgress?.(10);
 
-  const response = await fetch(`${API_URL}/analyze`, {
+  const apiUrl = await getApiUrl();
+  const response = await fetch(`${apiUrl}/analyze`, {
     method: "POST",
     body: formData,
   });
@@ -67,7 +75,8 @@ export async function analyzeVideo(
 
 export async function healthCheck(): Promise<boolean> {
   try {
-    const r = await fetch(`${API_URL}/health`, { method: "GET" });
+    const apiUrl = await getApiUrl();
+    const r = await fetch(`${apiUrl}/health`, { method: "GET" });
     return r.ok;
   } catch {
     return false;
